@@ -1,0 +1,57 @@
+schema: 1
+backend: cuda
+
+numerics:
+  precision: float64
+  enable_x64: true
+  bytes_per_cell: 640       # conservative FP64 planning value, not a measurement
+
+device_pool:
+  policy: grow
+  expected_physical_accelerators: 1
+  aggregate_hbm_gib: 16
+  min_devices: 1
+  max_devices: all
+  memory_gib_per_logical_device: auto
+  usable_fraction: 0.75
+  retry_on_oom: true
+
+profile:
+  device_counts: [all]
+  steps: 4
+  safe_fraction: 0.70
+  cases:
+    - {id: P00, local_shape: [16, 64, 32]}
+    - {id: P01, local_shape: [32, 128, 64]}
+    - {id: P02, local_shape: [64, 256, 128]}
+    - {id: P03, local_shape: [96, 384, 192]}
+
+science:
+  kind: generic_mmi_1x2
+  validation_level: fp64_physics_regression
+  device_counts: [all]
+  wavelength_um: 1.55
+  resolution_candidates_nm: [50, 60, 80, 100]
+  time_samples_fs: [320, 480, 640]
+  pml_thickness_um: 0.80
+  field_component: Ey
+  validation:
+    minimum_input_overlap_magnitude: 1.0e-12
+    minimum_total_transmission: 1.0e-4
+    maximum_total_transmission: 1.05
+    maximum_imbalance_db: 0.50
+    maximum_material_mirror_relative_error: 1.0e-12
+    maximum_output_neff_relative_difference: 1.0e-5
+    maximum_time_magnitude_relative_drift: 0.03
+  geometry:
+    core_index: 3.45
+    cladding_index: 1.44
+    core_height_um: 0.22
+    access_width_um: 0.50
+    input_length_um: 3.0
+    body_width_um: 3.2
+    body_length_um: 9.6
+    output_length_um: 3.0
+    output_offset_um: 0.8
+    side_padding_um: 2.0
+    z_padding_um: 1.0
