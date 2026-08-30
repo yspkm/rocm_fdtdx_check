@@ -30,6 +30,21 @@ def load_config(path: Path) -> dict[str, Any]:
         raise ValueError("precision must be float32 or float64")
     if precision == "float64" and not cfg["numerics"].get("enable_x64"):
         raise ValueError("float64 requires numerics.enable_x64=true")
+    pool = cfg.get("device_pool", {})
+    if not str(pool.get("hardware_id", "")).strip():
+        raise ValueError("device_pool.hardware_id must be a non-empty string")
+    expected_counts = pool.get("expected_logical_device_counts", [])
+    if expected_counts and (
+        not isinstance(expected_counts, list)
+        or any(int(value) < 1 for value in expected_counts)
+    ):
+        raise ValueError("device_pool.expected_logical_device_counts must be positive integers")
+    accepted_kinds = pool.get("accepted_device_kind_substrings", [])
+    if accepted_kinds and (
+        not isinstance(accepted_kinds, list)
+        or any(not str(value).strip() for value in accepted_kinds)
+    ):
+        raise ValueError("device_pool.accepted_device_kind_substrings must be non-empty strings")
     if "science" in cfg:
         science = cfg["science"]
         times = [float(value) for value in science["time_samples_fs"]]
@@ -141,9 +156,11 @@ def run_profile(config_path: Path, cfg: dict[str, Any]) -> int:
     capacity = {
         "schema": 1,
         "backend": cfg["backend"],
+        "hardware_id": cfg["device_pool"]["hardware_id"],
         "precision": cfg["numerics"]["precision"],
         "logical_devices_available": inv["logical_device_count"],
         "device_kinds": inv["device_kinds"],
+        "hardware_contract": inv["hardware_contract"],
         "expected_physical_accelerators": cfg["device_pool"].get(
             "expected_physical_accelerators"
         ),
@@ -179,8 +196,12 @@ def run_science(config_path: Path, cfg: dict[str, Any]) -> int:
     if not capacity_path.exists():
         raise RuntimeError("Run the profile stage first: ./run.sh profile CONFIG")
     capacity = yaml.safe_load(capacity_path.read_text())
-    if capacity["backend"] != cfg["backend"] or capacity["precision"] != cfg["numerics"]["precision"]:
-        raise RuntimeError("Capacity backend/precision does not match the science config")
+    if (
+        capacity["backend"] != cfg["backend"]
+        or capacity["precision"] != cfg["numerics"]["precision"]
+        or capacity.get("hardware_id") != cfg["device_pool"]["hardware_id"]
+    ):
+        raise RuntimeError("Capacity hardware/backend/precision does not match the science config")
 
     safe = int(capacity["recommended_safe_cells"])
     available = int(capacity["logical_devices_available"])
@@ -214,6 +235,7 @@ def run_science(config_path: Path, cfg: dict[str, Any]) -> int:
     plan: dict[str, Any] = {
         "schema": 1,
         "backend": cfg["backend"],
+        "hardware_id": cfg["device_pool"]["hardware_id"],
         "precision": cfg["numerics"]["precision"],
         "validation_level": cfg["science"]["validation_level"],
         "capacity_file": "results/capacity.yaml",
@@ -405,6 +427,7 @@ def run_science(config_path: Path, cfg: dict[str, Any]) -> int:
         "status": "PASS" if suite_valid else "FAIL",
         "validation_level": cfg["science"]["validation_level"],
         "backend": cfg["backend"],
+        "hardware_id": cfg["device_pool"]["hardware_id"],
         "precision": cfg["numerics"]["precision"],
         "detector_dtype": final["detector_dtype"],
         "field_state_dtypes": final["field_state_dtypes"],

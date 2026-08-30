@@ -122,6 +122,7 @@ The science planner is capped at <span class='mono'>{int(report['recommended_saf
 <div class='tablewrap'><table><thead><tr><th>Device / case</th><th>State</th><th>Total cells</th><th>Cells / device</th><th>Seconds</th></tr></thead>
 <tbody>{''.join(rows)}</tbody></table></div></section>
 <section class='panel'><h2>Scope and interpretation</h2><ul>
+<li>Hardware pool: <span class='mono'>{escape(str(report['hardware_id']))}</span>.</li>
 <li>Declared physical accelerators: {report.get('expected_physical_accelerators', '--')}; declared aggregate HBM: {report.get('declared_aggregate_hbm_gib', '--')} GiB.</li>
 <li>The profile measures FDTDX allocation and short-step execution, not long-run stability or converged device accuracy.</li>
 <li>The next action is to inspect <a href='../capacity.yaml'>capacity.yaml</a>, then run the capacity-matched science stage.</li>
@@ -175,6 +176,7 @@ detector, and reporting path; they are not a converged component specification.<
 <div class='tablewrap'><table><thead><tr><th>Check</th><th>Result</th></tr></thead><tbody>{validation_rows}</tbody></table></div></section>
 <section class='panel'><h2>Model and run definition</h2><div class='grid'>
 <div><h3>Execution</h3><table><tbody><tr><td>Backend</td><td class='mono'>{escape(str(report['backend']))}</td></tr>
+	<tr><td>Hardware pool</td><td class='mono'>{escape(str(report['hardware_id']))}</td></tr>
 	<tr><td>Precision</td><td class='mono'>{escape(str(report['precision']))}</td></tr><tr><td>Steps</td><td class='mono'>{int(report['steps']):,}</td></tr>
 	<tr><td>Field dtypes</td><td class='mono'>{escape(str(report['field_state_dtypes']))}</td></tr>
 	<tr><td>Detector dtype</td><td class='mono'>{escape(str(report['detector_dtype']))}</td></tr><tr><td>Time</td><td class='mono'>{float(report['time_fs']):g} fs</td></tr>
@@ -276,6 +278,7 @@ def science_suite_html(report: dict[str, Any]) -> str:
 <img src='{escape(str(final['field_path']))}' alt='Latest normalized real Ey field through the generic MMI'></section>
 <section class='panel'><h2>Validation gates</h2><div class='tablewrap'><table><thead><tr><th>Gate</th><th>Result</th></tr></thead><tbody>{validation_rows}</tbody></table></div></section>
 	<section class='panel'><h2>Interpretation limits</h2><ul>
+	<li>Hardware pool: <span class='mono'>{escape(str(report['hardware_id']))}</span>.</li>
 	<li>Grid contract <span class='mono'>{escape(str(report['grid_contract_hash'])[:12])}</span> is identical across all time windows; the output waveguides include {float(report['output_extension_um']):.3f} um of straight padding to contact the positive-x PML.</li>
 <li>Time convergence is based on output magnitudes, which are invariant to the arbitrary phase gauge of independently solved port modes.</li>
 <li>The diagnostic relative phase is retained in each case report but is not a PASS criterion.</li>

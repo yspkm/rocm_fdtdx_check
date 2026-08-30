@@ -16,6 +16,13 @@ for path in sorted(Path("configs").glob("*.yaml")):
     assert numerics["precision"] == "float64", path
     assert numerics["enable_x64"] is True, path
     pool = data["device_pool"]
+    assert isinstance(pool.get("hardware_id"), str) and pool["hardware_id"], path
+    expected_counts = pool.get("expected_logical_device_counts", [])
+    assert isinstance(expected_counts, list), path
+    assert all(isinstance(value, int) and value > 0 for value in expected_counts), path
+    accepted_kinds = pool.get("accepted_device_kind_substrings", [])
+    assert isinstance(accepted_kinds, list), path
+    assert all(isinstance(value, str) and value for value in accepted_kinds), path
     if "memory_gib_per_physical_accelerator" in pool:
         assert pool["aggregate_hbm_gib"] == (
             pool["expected_physical_accelerators"]

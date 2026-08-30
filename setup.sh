@@ -27,5 +27,8 @@ fi
 
 "$python_bin" -m pip install --constraint "$constraints" --editable "$root"
 "$python_bin" -m pip check
-printf 'Ready. Run: ./run.sh inventory configs/%s.yaml\n' \
-  "$([[ "$backend" == cuda ]] && printf cuda || printf rocm-mi250x-profile-fp64)"
+if [[ "$backend" == cuda ]]; then
+  printf '%s\n' 'Ready. Run: ./run.sh inventory configs/cuda.yaml'
+else
+  printf '%s\n' 'Ready. Select rocm-mi250x-profile-fp64.yaml or rocm-mi350p-profile-fp64.yaml.'
+fi

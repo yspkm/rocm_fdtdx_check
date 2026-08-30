@@ -4,6 +4,7 @@ import hashlib
 import importlib.metadata
 import json
 import math
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -20,12 +21,59 @@ def _software(jax: Any) -> dict[str, str]:
     }
 
 
-def _devices(jax: Any) -> list[Any]:
+def _device_contract(
+    cfg: dict[str, Any], devices: list[Any], *, full_inventory: bool
+) -> dict[str, Any]:
+    pool = cfg["device_pool"]
+    hardware_id = str(pool["hardware_id"])
+    expected_counts = [int(value) for value in pool.get("expected_logical_device_counts", [])]
+    accepted_kinds = [
+        str(value).lower() for value in pool.get("accepted_device_kind_substrings", [])
+    ]
+    observed_kinds = [str(device.device_kind) for device in devices]
+
+    unexpected_kinds = [
+        kind
+        for kind in observed_kinds
+        if accepted_kinds and not any(token in kind.lower() for token in accepted_kinds)
+    ]
+    if unexpected_kinds:
+        raise RuntimeError(
+            f"Hardware {hardware_id!r} rejected device kinds {unexpected_kinds!r}; "
+            f"expected one of {accepted_kinds!r}"
+        )
+
+    if full_inventory and expected_counts and len(devices) not in expected_counts:
+        raise RuntimeError(
+            f"Hardware {hardware_id!r} expected logical device count in {expected_counts!r}, "
+            f"observed {len(devices)}"
+        )
+
+    requested_visible = os.environ.get("FDTDX_CHECK_DEVICE_COUNT")
+    if requested_visible is not None and len(devices) != int(requested_visible):
+        raise RuntimeError(
+            f"Requested {requested_visible} visible devices, observed {len(devices)}"
+        )
+
+    return {
+        "hardware_id": hardware_id,
+        "status": "PASS",
+        "full_inventory": full_inventory,
+        "expected_logical_device_counts": expected_counts,
+        "accepted_device_kind_substrings": accepted_kinds,
+    }
+
+
+def _devices(
+    jax: Any, cfg: dict[str, Any], *, full_inventory: bool = False
+) -> tuple[list[Any], dict[str, Any]]:
     devices = list(jax.devices())
+    if not devices:
+        raise RuntimeError("No JAX devices detected")
     evidence = " ".join(f"{d.platform} {d.device_kind}".lower() for d in devices)
     if "cpu" in evidence:
         raise RuntimeError("CPU fallback detected")
-    return devices
+    return devices, _device_contract(cfg, devices, full_inventory=full_inventory)
 
 
 def _save(path: Path, payload: dict[str, Any]) -> None:
@@ -55,7 +103,7 @@ def _slice_record(obj: Any) -> list[list[int]]:
 def write_inventory(cfg: dict[str, Any], path: Path) -> None:
     import jax
 
-    devices = _devices(jax)
+    devices, contract = _devices(jax, cfg, full_inventory=True)
     _verify_precision_runtime(cfg, jax)
     payload = {
         "schema": 1,
@@ -64,6 +112,16 @@ def write_inventory(cfg: dict[str, Any], path: Path) -> None:
         "backend_observed": jax.default_backend(),
         "logical_device_count": len(devices),
         "device_kinds": sorted({d.device_kind for d in devices}),
+        "devices": [
+            {
+                "id": int(device.id),
+                "platform": str(device.platform),
+                "device_kind": str(device.device_kind),
+                "process_index": int(device.process_index),
+            }
+            for device in devices
+        ],
+        "hardware_contract": contract,
         "x64_enabled": bool(jax.config.read("jax_enable_x64")),
         "software": _software(jax),
     }
@@ -75,7 +133,7 @@ def run_profile_case(cfg: dict[str, Any], shape: list[int], path: Path) -> None:
     import jax.numpy as jnp
     import fdtdx
 
-    devices = _devices(jax)
+    devices, _ = _devices(jax, cfg)
     _verify_precision_runtime(cfg, jax)
     dtype = _dtype(cfg, jnp)
     spacing = 100e-9
@@ -151,7 +209,7 @@ def run_science_case(
     import numpy as np
     import fdtdx
 
-    devices = _devices(jax)
+    devices, _ = _devices(jax, cfg)
     _verify_precision_runtime(cfg, jax)
     dtype = _dtype(cfg, jnp)
     detector_dtype = jnp.complex128 if dtype == jnp.float64 else jnp.complex64
@@ -454,6 +512,7 @@ def run_science_case(
         "geometry": dict(g),
         "rasterized_geometry": rasterized_geometry,
         "backend": cfg["backend"],
+        "hardware_id": cfg["device_pool"]["hardware_id"],
         "logical_devices": len(devices),
         "field_shards": len(arrays.fields.E.addressable_shards),
         "precision": cfg["numerics"]["precision"],

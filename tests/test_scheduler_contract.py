@@ -89,6 +89,7 @@ class SchedulerContractTests(unittest.TestCase):
                     yaml.safe_dump(
                         {
                             "backend": "cuda",
+                            "hardware_id": cfg["device_pool"]["hardware_id"],
                             "precision": "float64",
                             "recommended_safe_cells": 100_000_000,
                             "logical_devices_available": 2,
@@ -109,6 +110,29 @@ class SchedulerContractTests(unittest.TestCase):
         self.assertTrue(suite["convergence"]["fixed_device_count"])
         self.assertEqual(plan["selected_logical_devices"], 2)
         self.assertEqual(plan["grid_shape"], grid["total_shape"])
+
+    def test_science_rejects_capacity_from_another_hardware_pool(self) -> None:
+        cfg = yaml.safe_load((ROOT / "configs" / "rocm-mi350p-science-fp64.yaml").read_text())
+        with tempfile.TemporaryDirectory() as tmp:
+            previous = Path.cwd()
+            os.chdir(tmp)
+            try:
+                Path("results").mkdir()
+                Path("results/capacity.yaml").write_text(
+                    yaml.safe_dump(
+                        {
+                            "backend": "rocm",
+                            "hardware_id": "amd-instinct-mi250x-4x",
+                            "precision": "float64",
+                            "recommended_safe_cells": 100_000_000,
+                            "logical_devices_available": 4,
+                        }
+                    )
+                )
+                with self.assertRaisesRegex(RuntimeError, "Capacity hardware"):
+                    cli.run_science(Path("config.yaml"), cfg)
+            finally:
+                os.chdir(previous)
 
 
 if __name__ == "__main__":

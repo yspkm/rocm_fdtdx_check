@@ -42,10 +42,21 @@ class GridContractTests(unittest.TestCase):
         self.assertEqual(grid["output_extension_cells"], 4)
         self.assertEqual(raster["effective_output_length"], 154)
 
+    def test_mi350p_20_nm_grid_uses_four_device_contract(self) -> None:
+        science = self.config("rocm-mi350p-science-fp64.yaml")["science"]
+        counts = science_device_milestones(science, available=4)
+        multiple = canonical_sharding_multiple(counts)
+        grid = science_grid(science, 20, multiple)
+        self.assertEqual(counts, [1, 2, 4])
+        self.assertEqual(multiple, 4)
+        self.assertEqual(grid["total_shape"][0], 860)
+        self.assertEqual(grid["output_extension_cells"], 0)
+
     def test_every_configured_grid_is_divisible_and_filled(self) -> None:
         scenarios = (
             ("cuda.yaml", (1,)),
             ("rocm-mi250x-science-fp64.yaml", (4, 8)),
+            ("rocm-mi350p-science-fp64.yaml", (4,)),
         )
         for name, available_values in scenarios:
             science = self.config(name)["science"]

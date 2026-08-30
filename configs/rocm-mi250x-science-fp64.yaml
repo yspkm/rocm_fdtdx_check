@@ -8,8 +8,11 @@ numerics:
   bytes_per_cell: 640       # conservative FP64 planning value, not a measurement
 
 device_pool:
+  hardware_id: amd-instinct-mi250x-4x
   policy: grow
   expected_physical_accelerators: 4
+  expected_logical_device_counts: [4, 8]
+  accepted_device_kind_substrings: [mi250x, gfx90a]
   memory_gib_per_physical_accelerator: 128
   aggregate_hbm_gib: 512
   min_devices: 1

@@ -1,24 +1,57 @@
-# FDTDX Accelerator Check
+# FDTDX accelerator check
 
-A small FP64 test for a same-host JAX accelerator pool. It first measures the
-largest FDTDX grid that can be allocated, then uses a conservative fraction of
-that measured capacity for a generic 1x2 MMI field-propagation test. Maxwell
-fields propagate in `float64`; mode-overlap and phasor detectors accumulate in
-`complex128` and their realized state dtypes are checked after execution.
+This repository checks FDTDX FP64 execution on GPU accelerators. The one-device
+CUDA path has already been exercised and is the reference. The ROCm path
+targets two four-card AMD Instinct systems, MI250X and MI350P. Each path profiles
+the largest grid that fits, keeps a 70% safety margin, and runs a generic 1x2 MMI
+propagation test at that capacity. Maxwell fields use `float64`; mode-overlap
+and phasor detectors use `complex128`.
 
-The model is generated analytically. It contains no imported GDS, foundry
-PCell, measured device, customer geometry, host name, user name, IP address, or
-credential.
+The MMI is generated analytically. The repository contains no imported GDS,
+foundry PCell, measured device, customer geometry, host details, or credentials.
 
-## Quick start on four MI250X cards
+## MI350P target: four cards
 
-Host prerequisites:
-
-- Linux with a working ROCm driver/runtime
-- four physical MI250X cards, 128 GiB HBM each (512 GiB declared total)
-- Python 3.12 and Git for bare-metal setup, or Docker for the container path
+The MI350P configuration expects four unpartitioned PCIe cards on one Linux
+host. JAX must report exactly four `MI350P` or `gfx950` devices. The declared
+memory is 144 GiB per card and 576 GiB in total.
 
 Bare metal:
+
+```bash
+./setup.sh rocm
+./run.sh inventory configs/rocm-mi350p-profile-fp64.yaml
+./run.sh profile configs/rocm-mi350p-profile-fp64.yaml
+./run.sh science configs/rocm-mi350p-science-fp64.yaml
+```
+
+Container:
+
+```bash
+./docker.sh build
+./docker.sh inventory configs/rocm-mi350p-profile-fp64.yaml
+./docker.sh profile configs/rocm-mi350p-profile-fp64.yaml
+./docker.sh science configs/rocm-mi350p-science-fp64.yaml
+```
+
+The pinned image, `rocm/jax:rocm7.2.4-jax0.8.2-py3.12`, is listed by AMD for
+JAX 0.8.2 and `gfx950`. Check the host driver, firmware, OS, and partition mode
+against the [ROCm 7.2.4 compatibility matrix](https://rocm.docs.amd.com/en/docs-7.2.4/compatibility/compatibility-matrix.html).
+AMD publishes the card specifications on the [MI350P product page](https://www.amd.com/en/products/accelerators/instinct/mi350/mi350p.html).
+
+Before a long run, record `amd-smi list`, `amd-smi topology`, and `rocminfo`.
+The four cards have separate local HBM rather than one physical 576 GiB memory
+space, so peer communication depends on the server topology.
+
+MI350P artifacts use the hardware ID `amd-instinct-mi350p-4x`. A science run
+will reject a capacity file from the MI250X pool. The local QA checks the
+configuration and scheduler; hardware support is established only when
+inventory, profile, and science all pass on the server.
+
+## MI250X target: four cards
+
+This path expects four MI250X cards with 128 GiB each, plus Python 3.12 and Git
+or Docker:
 
 ```bash
 ./setup.sh rocm
@@ -27,136 +60,71 @@ Bare metal:
 ./run.sh science configs/rocm-mi250x-science-fp64.yaml
 ```
 
-The first two run stages are intentional:
+An MI250X has two GPU dies. Four cards may therefore appear as four or eight
+JAX devices. The scripts accept either view and calculate planning memory as
+`512 GiB / logical_device_count` without treating dies as separate cards.
 
-1. `profile` launches fresh, short FDTDX jobs at increasing local grid sizes
-   and at 1, 2, 4, and all visible logical devices. It writes the last
-   successful allocation and a 70% safe capacity.
-2. `science` reads that capacity, writes the exact selected parameters to
-   `results/science-plan.yaml`, and runs the finest configured MMI grid that
-   fits. Science retries use only the declared `1, 2, 4, all` milestones. If any
-   time window fails with OOM, every time window is rerun in fresh processes at
-   the next milestone; results from different device counts are never mixed in
-   one convergence test. After exhausting the milestones, the failed attempt is
-   recorded and the next coarser resolution is tried.
-
-MI250X contains two GPU dies per physical card. Depending on the ROCm/JAX
-topology, four cards may appear as four or eight logical devices. The scripts
-discover that count at runtime and derive the planning memory as
-`512 GiB / logical_device_count`; they do not mislabel eight logical dies as
-eight physical cards.
-
-## Docker
-
-Build once while network access is available:
+The Docker commands without an explicit configuration use the MI250X files:
 
 ```bash
 ./docker.sh build
-```
-
-Then run with networking disabled inside the container:
-
-```bash
 ./docker.sh inventory
 ./docker.sh profile
 ./docker.sh science
 ```
 
-The runtime container receives only `/dev/kfd`, `/dev/dri`, and the local
-`results/` directory. It drops Linux capabilities, uses
-`no-new-privileges`, and has no embedded credential. A container cannot hide
-its memory or files from a machine administrator with host root access; do not
-put secrets in the image or runtime directory.
+The container runs without networking and receives only `/dev/kfd`, `/dev/dri`,
+and `results/`. It drops Linux capabilities and enables `no-new-privileges`.
+Do not place secrets in the image or results directory; host root can still
+read container memory and files.
 
-## FP64 and capacity semantics
+## What the checks do
 
-Both MI250X YAML files use:
+`profile` launches fresh jobs at increasing local grid sizes and at 1, 2, 4,
+and all visible devices. It records the largest successful allocation. A
+following OOM establishes a bounded capacity; otherwise the result is only a
+tested lower bound. The science limit is 70% of the largest passing case.
 
-```yaml
-numerics:
-  precision: float64
-  enable_x64: true
-  bytes_per_cell: 640
-```
+`science` selects the finest configured MMI grid below that limit and runs
+independent 320, 480, and 640 fs windows. An OOM moves the whole set of windows
+to the next device milestone in fresh processes. Results from different device
+counts are never mixed in one convergence check. Once the milestones are
+exhausted, the runner tries the next coarser resolution.
 
-`JAX_ENABLE_X64=true` is also set before JAX starts. Internal workers reject an
-x64 mismatch rather than silently truncating to FP32. Every science detector is
-constructed with `dtype=jnp.complex128`, and the report requires all four
-realized detector states (`input_norm`, `out1`, `out2`, and `field`) to remain
-`complex128`. The realized `E` and `H` arrays must independently report
-`float64`; both checks are science PASS criteria.
+Both ROCm paths set `JAX_ENABLE_X64=true`. The run fails if the E/H fields are
+not `float64`, any detector state is not `complex128`, or execution falls back
+to a CPU. `bytes_per_cell: 640` is a planning estimate; the allocation profile
+is the capacity record. `field_norm2 = sum(E**2) + sum(H**2)` is only a finite,
+nonzero activity check, not physical electromagnetic energy.
 
-`bytes_per_cell` is a conservative planning estimate; the profile result is the
-empirical authority.
-If the largest profile case passes, `capacity_interpretation` is
-`tested_lower_bound_only`. Only a following OOM establishes a bounded last
-success. The science stage never chooses a grid larger than the recorded 70%
-safe-cell count.
+The MMI keeps a 0.8 um PML and one canonical grid across the time windows. Its
+x dimension fits every permitted device count, with any extra cells extending
+the straight output waveguides to the PML. The checks cover finite overlaps,
+input normalization, transmission, coarse passivity, symmetry, port placement,
+mode agreement, and runtime precision. Reports include the declared and
+grid-realized geometry.
 
-The profile worker records `field_norm2 = sum(E**2) + sum(H**2)` only as a
-finite, nonzero activity check. It is deliberately not named electromagnetic
-energy; physical energy would require the material-weighted
-`epsilon*|E|^2 + mu*|H|^2` expression.
+This is an accelerator and physics regression, not a foundry-qualified model
+or publishable S-parameter result. Quantitative use still requires grid,
+material, port, and pulse-window convergence. Relative output phase remains a
+diagnostic because independently solved port modes may use different phase
+gauges.
 
-## Physics regression contract
+## Results
 
-The science stage runs independent 320, 480, and 640 fs simulations. It keeps
-the PML at a configured physical thickness of 0.8 um, so changing grid
-resolution changes the PML cell count rather than the absorber thickness. The
-last two windows must agree in both `|S21|` and `|S31|` within the configured
-relative-drift limit. All windows must also have the same canonical grid hash
-and use one fixed logical-device count.
+Generated files are written under `results/` and ignored by Git:
 
-The integer-cell geometry is the grid-sizing authority. One canonical x grid is
-chosen to be divisible by every configured device milestone. If that requires
-extra x cells, they extend the two straight output waveguides to the positive-x
-PML instead of creating a cladding gap and an internal waveguide termination.
-The output mode monitors remain tied to the declared device length, before this
-purely straight PML-contact extension.
+- `capacity.yaml`: inventory, profile attempts, boundary, and safe cell count
+- `science-plan.yaml`: selected grid, device milestones, and retry history
+- `profile-*/report.html`: capacity report
+- `science-*/report.html` and `report.json`: physics and convergence evidence
+- `science-*/resolution-*/time-*/field.png`: normalized real `Ey` at 1.55 um
+- matching `.sha256` files for machine-readable records
 
-Each time window must also satisfy all of these gates:
+## CUDA reference
 
-- finite complex output overlaps and a nonzero input normalization
-- minimum collected transmission and `T1 + T2 <= 1.05` coarse passivity
-- output imbalance within 0.5 dB for the declared mirror-symmetric structure
-- exact grid-material and output-port mirror placement
-- exact output-waveguide contact with the positive-x PML
-- matched output-mode effective indices within the declared tolerance
-- runtime `float64` E/H propagation with `complex128` detector states
-
-The analytic geometry is rasterized onto integer grid coordinates as explicit
-mirror pairs. Both declared and grid-realized dimensions are written to the
-reports. This avoids interpreting sub-cell continuous dimensions as if the Yee
-grid represented them exactly.
-
-## Outputs
-
-All generated files are under `results/` and are ignored by Git:
-
-- `capacity.yaml`: observed logical devices, every profile attempt, last pass,
-  boundary status, and safe cell count
-- `science-plan.yaml`: capacity-matched resolution, every resolution attempt,
-  milestone attempts, canonical grid hash, output extension, time windows,
-  physical PML, geometry, fixed device count, and retry policy
-- `profile-*/report.html`: readable capacity report
-- `science-*/report.html`: visual resolution, time-convergence, validation, and
-  grid-realization report
-- `science-*/resolution-*/time-*/field.png`: normalized real `Ey` field at 1.55 um
-- `science-*/report.json`: complex normalized output overlaps, powers,
-  gauge-invariant magnitude convergence, grid, precision, timing, and versions
-- matching `.sha256` files for machine-readable primary records
-
-The MMI result is an accelerator and end-to-end physics check, not a qualified
-foundry component or a converged insertion-loss claim. Grid convergence,
-material dispersion, port convergence, and a production pulse window would be
-required before interpreting the overlap values as publishable S-parameters.
-The reported relative output phase is diagnostic only: independently solved
-port modes can carry arbitrary global phase, so relative phase is not a PASS
-criterion without de-embedding or a shared phase reference.
-
-## Local CUDA check
-
-The CUDA YAML exercises the same FP64 path on one CUDA device:
+The CUDA configuration runs the same FP64 path on one device. CUDA and ROCm
+plugins must use separate virtual environments.
 
 ```bash
 ./setup.sh cuda
@@ -164,37 +132,26 @@ The CUDA YAML exercises the same FP64 path on one CUDA device:
 ./run.sh science configs/cuda.yaml
 ```
 
-Do not reuse one `.venv` for both CUDA and ROCm plugins.
+## Configuration and QA
 
-## Configuration
+YAML controls profile shapes, device milestones, capacity margins, resolution,
+time windows, PML thickness, validation gates, MMI dimensions, and refractive
+indices. FDTDX is pinned to public upstream commit
+`77b4bc523a8e98cb7dd388e99481a0000f71dd4d`; no private fork is included.
 
-The normal tuning surface is limited to YAML:
-
-- profile case shapes and device-count milestones
-- science device-count milestones used to construct one canonical sharding grid
-- safe fraction and FP64 planning bytes per cell
-- candidate science resolutions, time windows, physical PML thickness, and gates
-- generic MMI dimensions and refractive indices
-
-The FDTDX dependency is pinned to public upstream commit
-`77b4bc523a8e98cb7dd388e99481a0000f71dd4d`; no private fork is bundled.
-
-Official references:
-
-- [AMD ROCm JAX installation](https://rocm.docs.amd.com/projects/install-on-linux/en/latest/install/3rd-party/jax-install.html)
-- [JAX installation](https://docs.jax.dev/en/latest/installation.html)
-- [JAX default dtypes and X64](https://docs.jax.dev/en/latest/default_dtypes.html)
-- [AMD Instinct MI250X](https://www.amd.com/en/products/accelerators/instinct/mi200/mi250x.html)
-
-## QA
+Run the local checks with:
 
 ```bash
 ./qa.sh
 ```
 
-QA compiles the Python package, parses every YAML file, checks shell syntax and
-Git whitespace, and rejects local absolute paths, email-like strings, private
-keys, and IP-like values from repository content. Unit regressions cover every
-configured grid resolution, both four- and eight-logical-device MI250X views,
-the 80 nm segment-rounding boundary, the 20 nm output extension, and full
-time-window replay after an allocation OOM.
+QA compiles the package, validates YAML and shell syntax, checks Git whitespace,
+and runs the unit tests and privacy scan. Coverage includes grid divisibility,
+MI250X and MI350P device contracts, capacity isolation, and OOM retries.
+
+## References
+
+- [AMD ROCm JAX installation](https://rocm.docs.amd.com/projects/install-on-linux/en/latest/install/3rd-party/jax-install.html)
+- [JAX installation](https://docs.jax.dev/en/latest/installation.html)
+- [JAX default dtypes and X64](https://docs.jax.dev/en/latest/default_dtypes.html)
+- [AMD Instinct MI250X](https://www.amd.com/en/products/accelerators/instinct/mi200/mi250x.html)
